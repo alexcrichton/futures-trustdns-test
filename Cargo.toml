@@ -1,0 +1,10 @@
+[package]
+name = "futures-trustdns"
+version = "0.1.0"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+
+[dependencies]
+futures = { git = "https://github.com/alexcrichton/futures-rs", branch = "less-arc" }
+futures-io = { git = "https://github.com/alexcrichton/futures-rs", branch = "less-arc" }
+futures-mio = { git = "https://github.com/alexcrichton/futures-rs", branch = "less-arc" }
+trust-dns = "0.7.3"
