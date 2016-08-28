@@ -2,8 +2,7 @@
 
 extern crate futures;
 #[macro_use]
-extern crate futures_io;
-extern crate futures_mio;
+extern crate tokio_core;
 extern crate trust_dns;
 
 use std::collections::{HashMap, VecDeque};
@@ -11,8 +10,9 @@ use std::io;
 use std::net::SocketAddr;
 
 use futures::{Future, oneshot, Complete, BoxFuture, Poll};
+use futures::stream::{Stream, Fuse};
 use trust_dns::op::Message;
-use futures_mio::{Loop, LoopHandle, Sender, Receiver, UdpSocket};
+use tokio_core::{Loop, LoopHandle, Sender, Receiver, UdpSocket};
 
 fn print_response(m: Message) {
     println!("{}", m.get_queries()[0].get_name());
@@ -41,8 +41,7 @@ fn resolver(addr: SocketAddr, handle: LoopHandle) -> ResolverHandle {
         Resolver {
             addr: addr,
             socket: socket,
-            rx: rx,
-            rx_done: false,
+            rx: rx.fuse(),
             requests: HashMap::new(),
             queue: VecDeque::new(),
             buf: Vec::new(),
@@ -57,8 +56,7 @@ struct Resolver {
     socket: UdpSocket,
     queue: VecDeque<Message>,
     buf: Vec<u8>,
-    rx: Receiver<(Message, Complete<io::Result<Message>>)>,
-    rx_done: bool,
+    rx: Fuse<Receiver<(Message, Complete<io::Result<Message>>)>>,
     requests: HashMap<u16, Complete<io::Result<Message>>>,
 }
 
@@ -97,14 +95,15 @@ impl Future for Resolver {
         //
         // For each new message we assign it an id, and then add it to our queue
         // of messages to write out.
-        while !self.rx_done {
-            match self.rx.recv() {
-                Poll::Ok((mut msg, c)) => {
+        loop {
+            match self.rx.poll() {
+                Poll::Ok(Some((mut msg, c))) => {
                     let id = msg.id(next_request_id()).get_id();
                     self.queue.push_back(msg);
                     self.requests.insert(id, c);
                 }
-                Poll::Err(_) => self.rx_done = true,
+                Poll::Err(e) => return Poll::Err(e),
+                Poll::Ok(None) |
                 Poll::NotReady => break,
             }
         }
@@ -152,7 +151,7 @@ impl Future for Resolver {
         // If all our `ResolverHandle` instances have disappeared, we've written
         // all our pending requests, and all our requests have been answered,
         // then we're done. Otherwise we'll come back for more later.
-        if self.rx_done && self.queue.len() == 0 {
+        if self.rx.is_done() && self.queue.len() == 0 {
             Poll::Ok(())
         } else {
             Poll::NotReady
